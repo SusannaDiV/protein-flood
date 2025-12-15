@@ -4,6 +4,7 @@ Copyright (c) 2025 Paolo Pellizzoni, Florian Graf, Martin Uray, Stefan Huber and
 SPDX-License-Identifier: MIT
 """
 
+from typing import Tuple
 import torch
 import triton
 import triton.language as tl
