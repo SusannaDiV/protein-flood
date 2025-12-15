@@ -1,0 +1,13 @@
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+include setup.py
+
+recursive-include flooder *.py
+
+exclude flooder/__pycache__/*
+prune tests
+prune examples
+prune docs
+prune site
