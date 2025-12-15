@@ -196,7 +196,7 @@ def flood_complex(
             end = min(num_simplices, start + batch_size)
 
             #  Compute distances
-            elif landmarks.is_cpu:
+            if landmarks.is_cpu:
                 distances, _ = kdtree.query(np.asarray(points_on_simplex[start:end]))
                 distances = torch.as_tensor(distances)
             elif landmarks.is_cuda:

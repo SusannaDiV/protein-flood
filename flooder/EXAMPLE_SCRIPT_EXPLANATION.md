@@ -92,10 +92,10 @@ Command-line interface with argparse:
 
 ```bash
 python example_protein_pfc.py \
-    --scpdb_dir "path/to/pdbs" \
+    --scpdb_dir "/itet-stor/sdivita/net_scratch/scPDB" \
     --max_proteins 1 \
     --target_landmarks 500 \
-    --device cpu
+    --device cuda
 ```
 
 **Output**:
@@ -123,7 +123,7 @@ Computing persistent homology...
 
 ```bash
 python example_protein_pfc.py \
-    --scpdb_dir "path/to/pdbs" \
+    --scpdb_dir "/itet-stor/sdivita/net_scratch/scPDB" \
     --max_proteins 1 \
     --target_landmarks 500 \
     --device cuda \
@@ -134,7 +134,7 @@ python example_protein_pfc.py \
 
 ```bash
 python example_protein_pfc.py \
-    --scpdb_dir "path/to/scPDB" \
+    --scpdb_dir "/itet-stor/sdivita/net_scratch/scPDB" \
     --max_proteins 10 \
     --target_landmarks 500 \
     --device cuda \
