@@ -590,7 +590,8 @@ def compute_weighted_filtration_triton(
         simplex_vertices,
         use_triton=use_triton and simplex_vertices.is_cuda,
     )
-        
+    
+    if use_triton and simplex_vertices.is_cuda:
         # Use Triton kernel for weighted distance computation
         BLOCK_S = 64
         BLOCK_L = 256
@@ -623,6 +624,8 @@ def compute_weighted_filtration_triton(
             pass
     
     # Fallback: CPU or PyTorch implementation
+    from .pfc import compute_simplex_circumball
+    
     filtration_values = []
     for s in range(S):
         circumcenter, circumradius = compute_simplex_circumball(simplex_vertices[s])
