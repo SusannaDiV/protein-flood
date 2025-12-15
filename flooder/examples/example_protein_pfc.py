@@ -48,27 +48,38 @@ def process_protein_pdb(
     """
     print(f"\n{'='*60}")
     print(f"Processing: {pdb_path.name}")
+    print(f"  Full path: {pdb_path}")
+    print(f"  Device: {device}")
+    print(f"  Target landmarks: {target_landmarks}")
+    print(f"  Use PLS: {use_pls}")
     print(f"{'='*60}")
     
     # Load protein structure
     print("Loading protein structure...")
     try:
         protein = load_pdb_file(pdb_path)
-        print(f"  Loaded {len(protein.atom_coords)} atoms")
-        print(f"  {protein.num_residues} residues")
+        print(f"  ✓ Loaded {len(protein.atom_coords)} atoms")
+        print(f"  ✓ {protein.num_residues} residues")
+        print(f"  ✓ Protein structure loaded successfully")
     except Exception as e:
-        print(f"  ERROR: Failed to load PDB: {e}")
+        print(f"  ✗ ERROR: Failed to load PDB: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     
     # Construct Protein Flood Complex
     landmark_method = "Full PLS" if use_pls else "Simplified (residue-based)"
-    print(f"Constructing Protein Flood Complex ({landmark_method})...")
+    print(f"\nConstructing Protein Flood Complex ({landmark_method})...")
     if not use_pls:
         print("  Note: Simplified PFC is ~3-6x faster than full PLS")
         print("        (Simplified: ~1.7-4.5s, Full PLS: ~6.5-19s for typical proteins)")
         print("        Simplified PFC is often 1.1-1.3x FASTER than standard flooder")
         print("        due to more efficient circumball coverage vs witness points")
+    
+    import time
+    pfc_start_time = time.time()
     try:
+        print("  Starting PFC construction...")
         pfc_stree = protein_flood_complex(
             protein,
             target_landmarks=target_landmarks,
@@ -82,28 +93,39 @@ def process_protein_pdb(
             gamma_q=0.2,
             use_pls=use_pls,  # Use full PLS algorithm if True
         )
-        print(f"  Complex has {pfc_stree.num_simplices()} simplices")
+        pfc_time = time.time() - pfc_start_time
+        num_simplices = pfc_stree.num_simplices()
+        print(f"  ✓ Complex constructed successfully")
+        print(f"  ✓ Complex has {num_simplices} simplices")
+        print(f"  ✓ PFC construction time: {pfc_time:.2f} seconds")
     except Exception as e:
-        print(f"  ERROR: Failed to construct PFC: {e}")
+        print(f"  ✗ ERROR: Failed to construct PFC: {e}")
         import traceback
         traceback.print_exc()
         return None
     
     # Compute persistent homology
-    print("Computing persistent homology...")
+    print("\nComputing persistent homology...")
+    ph_start_time = time.time()
     try:
+        print("  Computing persistence...")
         pfc_stree.compute_persistence()
+        ph_time = time.time() - ph_start_time
+        print(f"  ✓ Persistence computed in {ph_time:.2f} seconds")
         
         # Extract persistence diagrams
+        print("  Extracting persistence diagrams...")
         diagrams = []
         for dim in range(max_dimension + 1):
             diag = pfc_stree.persistence_intervals_in_dimension(dim)
             diagrams.append(diag)
             n_features = len([p for p in diag if p[1] != float('inf')])
-            print(f"  H{dim}: {n_features} features")
+            n_infinite = len([p for p in diag if p[1] == float('inf')])
+            print(f"  ✓ H{dim}: {n_features} finite features, {n_infinite} infinite features")
         
         # Compute persistence images for ML
-        print("Computing persistence images...")
+        print("\nComputing persistence images...")
+        images_start_time = time.time()
         try:
             persistence_images = compute_persistence_images_from_simplex_tree(
                 pfc_stree,
@@ -112,10 +134,14 @@ def process_protein_pdb(
                 resolution=(20, 20),
                 normalize=True,
             )
+            images_time = time.time() - images_start_time
             feature_dim = get_feature_dimension(num_diagrams=max_dimension + 1, resolution=(20, 20))
-            print(f"  Persistence images: shape ({feature_dim},)")
+            print(f"  ✓ Persistence images computed in {images_time:.2f} seconds")
+            print(f"  ✓ Feature vector shape: ({feature_dim},)")
         except Exception as e:
-            print(f"  WARNING: Failed to compute persistence images: {e}")
+            print(f"  ✗ WARNING: Failed to compute persistence images: {e}")
+            import traceback
+            traceback.print_exc()
             persistence_images = None
         
         results = {
@@ -130,18 +156,37 @@ def process_protein_pdb(
             "simplex_tree": pfc_stree,
         }
         
+        print("\n" + "="*60)
+        print("Summary:")
+        print(f"  Protein: {pdb_path.stem}")
+        print(f"  Atoms: {len(protein.atom_coords)}")
+        print(f"  Residues: {protein.num_residues}")
+        print(f"  Landmarks: {target_landmarks}")
+        print(f"  Simplices: {pfc_stree.num_simplices()}")
+        print(f"  PFC time: {pfc_time:.2f}s")
+        print(f"  PH time: {ph_time:.2f}s")
+        if persistence_images is not None:
+            print(f"  Images time: {images_time:.2f}s")
+            print(f"  Total time: {pfc_time + ph_time + images_time:.2f}s")
+        else:
+            print(f"  Total time: {pfc_time + ph_time:.2f}s")
+        print("="*60)
+        
         # Save results if output directory specified
         if output_dir is not None:
+            print(f"\nSaving results...")
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
             output_file = output_dir / f"{pdb_path.stem}_pfc_results.pt"
             torch.save(results, output_file)
-            print(f"  Results saved to: {output_file}")
+            print(f"  ✓ Results saved to: {output_file}")
+        else:
+            print("\nNote: No output directory specified, results not saved")
         
         return results
         
     except Exception as e:
-        print(f"  ERROR: Failed to compute persistence: {e}")
+        print(f"  ✗ ERROR: Failed to compute persistence: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -167,32 +212,55 @@ def process_scpdb_directory(
         use_pls: If True, use full PLS algorithm; if False, use simplified
                  Note: Simplified PLS is typically 3-5x faster than full PLS
     """
+    print("\n" + "="*60)
+    print("BATCH PROCESSING: scPDB Directory")
+    print("="*60)
+    print(f"  Directory: {scpdb_dir}")
+    print(f"  Device: {device}")
+    print(f"  Target landmarks: {target_landmarks}")
+    print(f"  Use PLS: {use_pls}")
+    if max_proteins is not None:
+        print(f"  Max proteins: {max_proteins}")
+    else:
+        print(f"  Max proteins: ALL")
+    if output_dir is not None:
+        print(f"  Output directory: {output_dir}")
+    print("="*60)
+    
     scpdb_dir = Path(scpdb_dir)
     
     if not scpdb_dir.exists():
-        print(f"ERROR: scPDB directory not found: {scpdb_dir}")
+        print(f"\n✗ ERROR: scPDB directory not found: {scpdb_dir}")
         return
     
     # Find all PDB files
+    print(f"\nSearching for PDB files in {scpdb_dir}...")
     pdb_files = list(scpdb_dir.glob("**/*.pdb"))
     pdb_files.extend(list(scpdb_dir.glob("**/*.ent")))  # Some use .ent extension
     
     if not pdb_files:
-        print(f"WARNING: No PDB files found in {scpdb_dir}")
+        print(f"✗ WARNING: No PDB files found in {scpdb_dir}")
         return
     
-    print(f"Found {len(pdb_files)} PDB files")
+    print(f"  ✓ Found {len(pdb_files)} PDB files")
     
     if max_proteins is not None:
         pdb_files = pdb_files[:max_proteins]
-        print(f"Processing first {len(pdb_files)} files")
+        print(f"  → Processing first {len(pdb_files)} files")
+    else:
+        print(f"  → Processing all {len(pdb_files)} files")
     
     results_list = []
     successful = 0
     failed = 0
     
+    import time
+    total_start_time = time.time()
+    
     for i, pdb_file in enumerate(pdb_files, 1):
-        print(f"\n[{i}/{len(pdb_files)}]")
+        print(f"\n{'#'*60}")
+        print(f"# Protein {i}/{len(pdb_files)}")
+        print(f"{'#'*60}")
         result = process_protein_pdb(
             pdb_file,
             target_landmarks=target_landmarks,
@@ -204,11 +272,22 @@ def process_scpdb_directory(
         if result is not None:
             results_list.append(result)
             successful += 1
+            print(f"\n✓ Protein {i}/{len(pdb_files)} completed successfully")
         else:
             failed += 1
+            print(f"\n✗ Protein {i}/{len(pdb_files)} failed")
+    
+    total_time = time.time() - total_start_time
     
     print(f"\n{'='*60}")
-    print(f"Summary: {successful} successful, {failed} failed")
+    print("BATCH PROCESSING SUMMARY")
+    print(f"{'='*60}")
+    print(f"  Total proteins processed: {len(pdb_files)}")
+    print(f"  ✓ Successful: {successful}")
+    print(f"  ✗ Failed: {failed}")
+    print(f"  Total time: {total_time:.2f} seconds")
+    if successful > 0:
+        print(f"  Average time per protein: {total_time/successful:.2f} seconds")
     print(f"{'='*60}")
     
     return results_list
@@ -260,10 +339,28 @@ def main():
     
     args = parser.parse_args()
     
+    print("\n" + "="*60)
+    print("PROTEIN FLOOD COMPLEX (PFC) - Example Script")
+    print("="*60)
+    print(f"Arguments:")
+    print(f"  scpdb_dir: {args.scpdb_dir}")
+    print(f"  max_proteins: {args.max_proteins}")
+    print(f"  target_landmarks: {args.target_landmarks}")
+    print(f"  device: {args.device}")
+    print(f"  output_dir: {args.output_dir}")
+    print(f"  use_pls: {args.use_pls}")
+    print("="*60)
+    
     # Check device availability
-    if args.device == "cuda" and not torch.cuda.is_available():
-        print("WARNING: CUDA not available, using CPU")
-        args.device = "cpu"
+    if args.device == "cuda":
+        if torch.cuda.is_available():
+            print(f"\n✓ CUDA available: {torch.cuda.get_device_name(0)}")
+            print(f"  GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            print("\n⚠ WARNING: CUDA requested but not available, using CPU")
+            args.device = "cpu"
+    else:
+        print("\n→ Using CPU")
     
     # Process proteins
     results = process_scpdb_directory(
@@ -274,6 +371,10 @@ def main():
         output_dir=Path(args.output_dir) if args.output_dir else None,
         use_pls=args.use_pls,
     )
+    
+    print("\n" + "="*60)
+    print("SCRIPT COMPLETED")
+    print("="*60)
     
     return results
 
