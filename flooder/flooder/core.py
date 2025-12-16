@@ -163,21 +163,41 @@ def flood_complex(
         # values directly without sampling points on simplices
         if landmark_weights is not None:
             # Weighted flooding with circumball coverage (PFC approach)
-            # Use Triton-optimized kernel for GPU acceleration
+            # GPU/Triton ONLY - no CPU fallback
+            if not landmarks.is_cuda:
+                raise RuntimeError(
+                    "Weighted flooding (PFC) requires GPU. "
+                    "Please use device='cuda' or ensure landmarks are on GPU."
+                )
+            if not use_triton:
+                raise RuntimeError(
+                    "Weighted flooding (PFC) requires Triton. "
+                    "Please set use_triton=True."
+                )
+            
             # Get vertex coordinates for all simplices: (num_simplices, d+1, d)
             all_simplex_vertices = landmarks[d_simplices]  # (num_simplices, d+1, d)
             
-            # Compute weighted filtration values using Triton kernel
+            # Compute weighted filtration values using Triton kernel (GPU only)
             filtration_values = compute_weighted_filtration_triton(
                 all_simplex_vertices,
                 landmarks,
                 landmark_weights,
-                use_triton=use_triton and landmarks.is_cuda,
+                use_triton=True,  # Force Triton
             )
+            
+            # Check for NaN/Inf values
+            if torch.isnan(filtration_values).any() or torch.isinf(filtration_values).any():
+                nan_count = torch.isnan(filtration_values).sum().item()
+                inf_count = torch.isinf(filtration_values).sum().item()
+                raise RuntimeError(
+                    f"Invalid filtration values detected: {nan_count} NaN, {inf_count} Inf. "
+                    f"This may indicate an issue with circumball computation or landmark weights."
+                )
             
             # Store filtration values directly
             for simplex, filtr_val in zip(d_simplices.tolist(), filtration_values.tolist()):
-                out_complex[tuple(simplex)] = filtr_val
+                out_complex[tuple(simplex)] = filtr_val.item()
             continue  # Skip the witness point sampling for this dimension
         
         # Standard flood complex: generate points on simplices

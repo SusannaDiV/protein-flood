@@ -227,7 +227,7 @@ def protein_flood_complex(
     gamma_q: float = 0.2,
     r_min: Optional[float] = None,
     r_max: Optional[float] = None,
-    device: str = "cpu",
+    device: str = "cuda",  # Default to GPU
     return_simplex_tree: bool = True,
     use_pls: bool = False,
     pls_oversampling: float = 4.0,
@@ -384,6 +384,21 @@ def protein_flood_complex(
     # Step C: Use extended flood_complex with weighted radii
     # For PFC, we use landmarks as both the complex vertices and coverage centers
     # The witness points are the landmarks themselves (with weighted radii)
+    
+    # Enforce GPU/Triton for weighted flooding
+    if landmark_weights is not None:
+        if device != "cuda" or not landmarks.is_cuda:
+            raise RuntimeError(
+                "Weighted flooding (PFC) requires GPU. "
+                f"Current device: {device}, landmarks on CUDA: {landmarks.is_cuda}. "
+                "Please use device='cuda'."
+            )
+        if not use_triton:
+            raise RuntimeError(
+                "Weighted flooding (PFC) requires Triton. "
+                "Please set use_triton=True."
+            )
+    
     pfc_stree = flood_complex(
         points=landmarks,  # Use landmarks as witness points
         landmarks=landmarks,  # Landmarks form the Delaunay complex

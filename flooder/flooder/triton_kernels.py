@@ -436,28 +436,24 @@ def compute_circumballs_triton(
     """
     Compute circumballs for multiple simplices using Triton kernel.
     
+    GPU/Triton ONLY - no CPU fallback.
+    
     Args:
-        simplex_vertices: (S, d+1, d) tensor of simplex vertices
-        use_triton: Whether to use Triton kernel
+        simplex_vertices: (S, d+1, d) tensor of simplex vertices (must be on GPU)
+        use_triton: Whether to use Triton kernel (must be True)
         
     Returns:
         Tuple of (circumcenters, circumradii) where:
         - circumcenters: (S, d) tensor
         - circumradii: (S,) tensor
     """
-    S, simplex_dim, d = simplex_vertices.shape
+    # Enforce GPU/Triton only
+    if not simplex_vertices.is_cuda:
+        raise RuntimeError("simplex_vertices must be on GPU (CUDA)")
+    if not use_triton:
+        raise RuntimeError("use_triton must be True (GPU/Triton only)")
     
-    if not use_triton or not simplex_vertices.is_cuda:
-        # Fallback to PyTorch implementation
-        from .pfc import compute_simplex_circumball
-        
-        circumcenters = []
-        circumradii = []
-        for s in range(S):
-            center, radius = compute_simplex_circumball(simplex_vertices[s])
-            circumcenters.append(center)
-            circumradii.append(radius)
-        return torch.stack(circumcenters), torch.stack(circumradii)
+    S, simplex_dim, d = simplex_vertices.shape
     
     # Triton kernel implementation
     BLOCK_S = 64
@@ -469,30 +465,32 @@ def compute_circumballs_triton(
     circumcenters = torch.zeros(S, d, device=simplex_vertices.device, dtype=torch.float32)
     circumradii = torch.zeros(S, device=simplex_vertices.device, dtype=torch.float32)
     
-    # Launch kernel
+    # Launch kernel (GPU/Triton only, no fallback)
     grid = (triton.cdiv(S, BLOCK_S),)
     
-    try:
-        compute_circumballs_kernel[grid](
-            vertices_flat,
-            circumcenters,
-            circumradii,
-            S,
-            simplex_dim=simplex_dim,
-            d=d,
-            BLOCK_S=BLOCK_S,
+    compute_circumballs_kernel[grid](
+        vertices_flat,
+        circumcenters,
+        circumradii,
+        S,
+        simplex_dim=simplex_dim,
+        d=d,
+        BLOCK_S=BLOCK_S,
+    )
+    
+    # Validate output
+    if torch.isnan(circumcenters).any() or torch.isnan(circumradii).any():
+        nan_centers = torch.isnan(circumcenters).sum().item()
+        nan_radii = torch.isnan(circumradii).sum().item()
+        raise RuntimeError(
+            f"NaN detected in circumball computation: {nan_centers} centers, {nan_radii} radii"
         )
-    except RuntimeError as e:
-        # Fallback if kernel fails
-        from .pfc import compute_simplex_circumball
-        
-        circumcenters_list = []
-        circumradii_list = []
-        for s in range(S):
-            center, radius = compute_simplex_circumball(simplex_vertices[s])
-            circumcenters_list.append(center)
-            circumradii_list.append(radius)
-        return torch.stack(circumcenters_list), torch.stack(circumradii_list)
+    if torch.isinf(circumcenters).any() or torch.isinf(circumradii).any():
+        inf_centers = torch.isinf(circumcenters).sum().item()
+        inf_radii = torch.isinf(circumradii).sum().item()
+        raise RuntimeError(
+            f"Inf detected in circumball computation: {inf_centers} centers, {inf_radii} radii"
+        )
     
     return circumcenters, circumradii
 
@@ -537,7 +535,7 @@ def compute_weighted_distances_kernel(
         radius = tl.load(radii_ptr + s_global)
         
         # Compute max weighted distance over landmarks in this tile
-        max_weighted = 0.0
+        max_weighted = float('-inf')  # Start with -inf so max works correctly
         for l_idx in range(BLOCK_L):
             if not l_mask[l_idx]:
                 continue
@@ -554,14 +552,17 @@ def compute_weighted_distances_kernel(
             
             # Weighted distance: (dist + radius) / weight
             weight = tl.load(weights_ptr + l_global)
-            weighted_dist = (dist + radius) / weight
-            
-            max_weighted = tl.maximum(max_weighted, weighted_dist)
+            # Avoid division by zero (shouldn't happen, but safety check)
+            if weight > 0.0:
+                weighted_dist = (dist + radius) / weight
+                max_weighted = tl.maximum(max_weighted, weighted_dist)
         
         # Atomic max to combine results from different landmark tiles
         if pid_l == 0:
+            # First tile: store initial value
             tl.store(output_ptr + s_global, max_weighted)
         else:
+            # Subsequent tiles: atomic max
             tl.atomic_max(output_ptr + s_global, max_weighted)
 
 
@@ -574,63 +575,82 @@ def compute_weighted_filtration_triton(
     """
     Compute weighted filtration values using circumball coverage (Triton-optimized).
     
+    GPU/Triton ONLY - no CPU fallback.
+    
     Args:
-        simplex_vertices: (S, d+1, d) tensor of simplex vertices
-        landmarks: (L, d) tensor of landmark positions
-        landmark_weights: (L,) tensor of landmark weights
-        use_triton: Whether to use Triton kernel
+        simplex_vertices: (S, d+1, d) tensor of simplex vertices (must be on GPU)
+        landmarks: (L, d) tensor of landmark positions (must be on GPU)
+        landmark_weights: (L,) tensor of landmark weights (must be on GPU, all > 0)
+        use_triton: Whether to use Triton kernel (must be True)
         
     Returns:
         (S,) tensor of filtration values
     """
+    # Enforce GPU/Triton only
+    if not simplex_vertices.is_cuda:
+        raise RuntimeError("simplex_vertices must be on GPU (CUDA)")
+    if not landmarks.is_cuda:
+        raise RuntimeError("landmarks must be on GPU (CUDA)")
+    if not landmark_weights.is_cuda:
+        raise RuntimeError("landmark_weights must be on GPU (CUDA)")
+    if not use_triton:
+        raise RuntimeError("use_triton must be True (GPU/Triton only)")
+    
+    # Validate weights
+    if (landmark_weights <= 0).any():
+        raise ValueError("All landmark_weights must be positive")
+    
     S, simplex_dim, d = simplex_vertices.shape
     L = len(landmarks)
     
-    # Compute circumballs using Triton kernel
+    # Compute circumballs using Triton kernel (GPU only)
     circumcenters, circumradii = compute_circumballs_triton(
         simplex_vertices,
-        use_triton=use_triton and simplex_vertices.is_cuda,
+        use_triton=True,  # Force Triton
     )
     
-    if use_triton and simplex_vertices.is_cuda:
-        # Use Triton kernel for weighted distance computation
-        BLOCK_S = 64
-        BLOCK_L = 256
-        
-        landmarks_flat = landmarks.contiguous()
-        weights_flat = landmark_weights.contiguous()
-        centers_flat = circumcenters.contiguous()
-        radii_flat = circumradii.contiguous()
-        
-        output = torch.zeros(S, device=simplex_vertices.device, dtype=torch.float32)
-        
-        grid = (triton.cdiv(S, BLOCK_S), triton.cdiv(L, BLOCK_L))
-        
-        try:
-            compute_weighted_distances_kernel[grid](
-                centers_flat,
-                radii_flat,
-                landmarks_flat,
-                weights_flat,
-                output,
-                S,
-                L,
-                d=d,
-                BLOCK_S=BLOCK_S,
-                BLOCK_L=BLOCK_L,
-            )
-            return output
-        except RuntimeError:
-            # Fallback to PyTorch
-            pass
+    # Check for NaN/Inf in circumballs
+    if torch.isnan(circumcenters).any() or torch.isnan(circumradii).any():
+        raise RuntimeError("NaN detected in circumball computation")
+    if torch.isinf(circumcenters).any() or torch.isinf(circumradii).any():
+        raise RuntimeError("Inf detected in circumball computation")
     
-    # Fallback: CPU or PyTorch implementation
-    from .pfc import compute_simplex_circumball
+    # Use Triton kernel for weighted distance computation
+    BLOCK_S = 64
+    BLOCK_L = 256
     
-    filtration_values = []
-    for s in range(S):
-        circumcenter, circumradius = compute_simplex_circumball(simplex_vertices[s])
-        dists = torch.norm(landmarks - circumcenter.unsqueeze(0), dim=1)
-        epsilon = torch.max((dists + circumradius) / landmark_weights)
-        filtration_values.append(epsilon.item())
-    return torch.tensor(filtration_values, device=simplex_vertices.device, dtype=torch.float32)
+    landmarks_flat = landmarks.contiguous()
+    weights_flat = landmark_weights.contiguous()
+    centers_flat = circumcenters.contiguous()
+    radii_flat = circumradii.contiguous()
+    
+    # Initialize output with -inf (we'll take max, so start with -inf)
+    output = torch.full((S,), float('-inf'), device=simplex_vertices.device, dtype=torch.float32)
+    
+    grid = (triton.cdiv(S, BLOCK_S), triton.cdiv(L, BLOCK_L))
+    
+    compute_weighted_distances_kernel[grid](
+        centers_flat,
+        radii_flat,
+        landmarks_flat,
+        weights_flat,
+        output,
+        S,
+        L,
+        d=d,
+        BLOCK_S=BLOCK_S,
+        BLOCK_L=BLOCK_L,
+    )
+    
+    # Check for NaN/Inf in output
+    if torch.isnan(output).any():
+        nan_count = torch.isnan(output).sum().item()
+        raise RuntimeError(f"NaN detected in weighted filtration computation: {nan_count}/{S} values")
+    if torch.isinf(output).any():
+        inf_count = torch.isinf(output).sum().item()
+        # Check if it's -inf (initialization) or +inf (actual issue)
+        if (output == float('inf')).any():
+            inf_count_pos = (output == float('inf')).sum().item()
+            raise RuntimeError(f"Inf detected in weighted filtration computation: {inf_count_pos}/{S} values")
+    
+    return output
