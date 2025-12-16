@@ -118,6 +118,30 @@ def process_protein_pdb(
             print("  ✗ ERROR: Simplex tree is empty!")
             return None
         
+        # Check for invalid filtration values by iterating through simplices
+        print("  Checking filtration values...")
+        invalid_count = 0
+        nan_count = 0
+        inf_count = 0
+        neg_count = 0
+        
+        try:
+            for simplex, filtr_val in pfc_stree.get_filtration():
+                if isinstance(filtr_val, float):
+                    if np.isnan(filtr_val):
+                        nan_count += 1
+                    elif np.isinf(filtr_val):
+                        inf_count += 1
+                    elif filtr_val < 0:
+                        neg_count += 1
+        except Exception as e:
+            print(f"  ⚠ Could not check filtration values: {e}")
+        
+        if nan_count > 0 or inf_count > 0 or neg_count > 0:
+            print(f"  ⚠ WARNING: Found invalid filtration values:")
+            print(f"    NaN: {nan_count}, Inf: {inf_count}, Negative: {neg_count}")
+            print(f"    This may cause issues with persistence computation")
+        
         # Try to make filtration non-decreasing (safety check)
         print("  Ensuring filtration is non-decreasing...")
         try:
@@ -127,27 +151,12 @@ def process_protein_pdb(
             print(f"  ⚠ WARNING: Could not validate filtration: {e}")
         
         print("  Computing persistence...")
-        # Use a subprocess or try-catch to handle segfaults better
-        import signal
-        import sys
+        print("  ⚠ NOTE: If this crashes with 'Segmentation fault', it's likely a gudhi issue.")
+        print("  ⚠       Try: updating gudhi, or checking for invalid filtration values.")
         
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Persistence computation timed out")
-        
-        # Set a timeout (30 seconds should be enough)
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(30)
-        
-        try:
-            pfc_stree.compute_persistence()
-            signal.alarm(0)  # Cancel alarm
-        except TimeoutError:
-            signal.alarm(0)
-            print("  ✗ ERROR: Persistence computation timed out")
-            return None
-        except Exception as e:
-            signal.alarm(0)
-            raise e
+        # Note: compute_persistence() can segfault if simplex tree is invalid
+        # This is a known issue with gudhi - segfaults can't be caught in Python
+        pfc_stree.compute_persistence()
         
         ph_time = time.time() - ph_start_time
         print(f"  ✓ Persistence computed in {ph_time:.2f} seconds")
