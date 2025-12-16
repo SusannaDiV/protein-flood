@@ -232,16 +232,19 @@ def compute_circumballs_kernel(
     - Triangles (simplex_dim=3): circumcenter formula
     - Tetrahedra (simplex_dim=4): approximate method
     """
-    pid = tl.program_id(0)  # simplex index
+    pid = tl.program_id(0)  # simplex tile index
     
+    # Compute global simplex indices for this block
     s_offset = pid * BLOCK_S + tl.arange(0, BLOCK_S)
     s_mask = s_offset < S
     
+    # Process each simplex in the block
     for s_idx in range(BLOCK_S):
-        if not s_mask[s_idx]:
-            continue
-        
         s_global = s_offset[s_idx]
+        
+        # Skip if out of bounds
+        if s_global >= S:
+            continue
         
         if simplex_dim == 2:  # Edge
             # Load vertices
@@ -523,10 +526,11 @@ def compute_weighted_distances_kernel(
     
     # Process each simplex in this block
     for s_idx in range(BLOCK_S):
-        if not s_mask[s_idx]:
-            continue
-        
         s_global = s_offset[s_idx]
+        
+        # Skip if out of bounds
+        if s_global >= S:
+            continue
         
         # Load circumcenter and radius
         center = tl.zeros([d], dtype=tl.float32)
@@ -537,10 +541,11 @@ def compute_weighted_distances_kernel(
         # Compute max weighted distance over landmarks in this tile
         max_weighted = float('-inf')  # Start with -inf so max works correctly
         for l_idx in range(BLOCK_L):
-            if not l_mask[l_idx]:
-                continue
-            
             l_global = l_offset[l_idx]
+            
+            # Skip if out of bounds
+            if l_global >= L:
+                continue
             
             # Distance from circumcenter to landmark
             sq_dist = 0.0
