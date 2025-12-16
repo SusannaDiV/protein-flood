@@ -120,6 +120,36 @@ class ProteinStructure:
     def to_torch(self, device: str = "cpu") -> torch.Tensor:
         """Convert atom coordinates to PyTorch tensor."""
         return torch.from_numpy(self.atom_coords.astype(np.float32)).to(device)
+    
+    def get_backbone_atoms(self, res_idx: int) -> List[int]:
+        """Get atom indices for backbone atoms in a residue."""
+        atom_indices = self.residue_to_atoms.get(res_idx, [])
+        backbone_indices = [
+            i for i in atom_indices
+            if self.atom_names[i] in BACKBONE_ATOMS
+        ]
+        return backbone_indices
+    
+    def get_sidechain_atoms(self, res_idx: int) -> List[int]:
+        """Get atom indices for sidechain atoms in a residue."""
+        atom_indices = self.residue_to_atoms.get(res_idx, [])
+        sidechain_indices = [
+            i for i in atom_indices
+            if self.atom_names[i] not in BACKBONE_ATOMS
+        ]
+        return sidechain_indices
+    
+    def get_residue_centroid(self, res_idx: int, atom_indices: List[int]) -> np.ndarray:
+        """Compute centroid of specified atoms in a residue."""
+        if not atom_indices:
+            # Fallback: use all atoms in residue
+            atom_indices = self.residue_to_atoms.get(res_idx, [])
+        if not atom_indices:
+            # Still empty, return zero vector
+            return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        
+        coords = self.atom_coords[atom_indices]
+        return coords.mean(axis=0).astype(np.float32)
 
 
 def load_pdb_file(
