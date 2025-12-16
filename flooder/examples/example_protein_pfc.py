@@ -234,15 +234,35 @@ def process_scpdb_directory(
         return
     
     # Find all PDB files
+    # scPDB structure: files are in subdirectories like 2011-2019/
     print(f"\nSearching for PDB files in {scpdb_dir}...")
-    pdb_files = list(scpdb_dir.glob("**/*.pdb"))
-    pdb_files.extend(list(scpdb_dir.glob("**/*.ent")))  # Some use .ent extension
+    
+    # Try common scPDB subdirectory structures
+    search_paths = [
+        scpdb_dir / "2011-2019",  # Common scPDB structure
+        scpdb_dir,  # Also search root
+    ]
+    
+    pdb_files = []
+    for search_path in search_paths:
+        if search_path.exists():
+            print(f"  Searching in: {search_path}")
+            found_pdb = list(search_path.glob("**/*.pdb"))
+            found_ent = list(search_path.glob("**/*.ent"))
+            pdb_files.extend(found_pdb)
+            pdb_files.extend(found_ent)
+            if found_pdb or found_ent:
+                print(f"    Found {len(found_pdb)} .pdb and {len(found_ent)} .ent files")
+    
+    # Remove duplicates
+    pdb_files = list(set(pdb_files))
     
     if not pdb_files:
         print(f"✗ WARNING: No PDB files found in {scpdb_dir}")
+        print(f"  Searched in: {[str(p) for p in search_paths if p.exists()]}")
         return
     
-    print(f"  ✓ Found {len(pdb_files)} PDB files")
+    print(f"  ✓ Found {len(pdb_files)} total PDB files")
     
     if max_proteins is not None:
         pdb_files = pdb_files[:max_proteins]
