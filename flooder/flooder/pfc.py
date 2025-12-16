@@ -387,12 +387,27 @@ def protein_flood_complex(
     
     # Enforce GPU/Triton for weighted flooding
     if landmark_weights is not None:
-        if device != "cuda" or not landmarks.is_cuda:
+        # Check device
+        if device != "cuda":
             raise RuntimeError(
                 "Weighted flooding (PFC) requires GPU. "
-                f"Current device: {device}, landmarks on CUDA: {landmarks.is_cuda}. "
-                "Please use device='cuda'."
+                f"Current device: {device}. Please use device='cuda'."
             )
+        
+        # Check landmarks are on CUDA
+        if not isinstance(landmarks, torch.Tensor):
+            raise RuntimeError(
+                "Weighted flooding (PFC) requires landmarks to be a torch.Tensor. "
+                f"Got type: {type(landmarks)}"
+            )
+        
+        if not landmarks.is_cuda:
+            raise RuntimeError(
+                "Weighted flooding (PFC) requires landmarks on CUDA. "
+                f"Landmarks device: {landmarks.device}. Please move landmarks to CUDA."
+            )
+        
+        # Check Triton
         if not use_triton:
             raise RuntimeError(
                 "Weighted flooding (PFC) requires Triton. "
