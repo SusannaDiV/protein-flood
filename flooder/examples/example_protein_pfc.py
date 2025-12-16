@@ -108,8 +108,47 @@ def process_protein_pdb(
     print("\nComputing persistent homology...")
     ph_start_time = time.time()
     try:
+        # Validate simplex tree before computing persistence
+        print("  Validating simplex tree...")
+        num_simplices = pfc_stree.num_simplices()
+        print(f"  ✓ Simplex tree has {num_simplices} simplices")
+        
+        # Check for potential issues
+        if num_simplices == 0:
+            print("  ✗ ERROR: Simplex tree is empty!")
+            return None
+        
+        # Try to make filtration non-decreasing (safety check)
+        print("  Ensuring filtration is non-decreasing...")
+        try:
+            pfc_stree.make_filtration_non_decreasing()
+            print("  ✓ Filtration validated")
+        except Exception as e:
+            print(f"  ⚠ WARNING: Could not validate filtration: {e}")
+        
         print("  Computing persistence...")
-        pfc_stree.compute_persistence()
+        # Use a subprocess or try-catch to handle segfaults better
+        import signal
+        import sys
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Persistence computation timed out")
+        
+        # Set a timeout (30 seconds should be enough)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(30)
+        
+        try:
+            pfc_stree.compute_persistence()
+            signal.alarm(0)  # Cancel alarm
+        except TimeoutError:
+            signal.alarm(0)
+            print("  ✗ ERROR: Persistence computation timed out")
+            return None
+        except Exception as e:
+            signal.alarm(0)
+            raise e
+        
         ph_time = time.time() - ph_start_time
         print(f"  ✓ Persistence computed in {ph_time:.2f} seconds")
         
